@@ -1,42 +1,71 @@
 <template>
   <div class="bitcoin-tracker">
     <h1>Bitcoin Price Tracker</h1>
+    
+    <div v-if="showTestDataWarning" class="test-data-warning">
+      <div class="warning-content">
+        <p>Using test data. For real Bitcoin prices, configure CoinGecko API key.</p>
+        <div class="test-values">
+          <span v-for="(item, index) in testDataPreview" :key="index">
+            {{ item.label }}: ${{ item.value.toLocaleString() }}
+          </span>
+        </div>
+      </div>
+    </div>
+    
     <BitcoinSelector 
       @update="fetchData" 
       :disabled="isLoading" 
     />
     
-    <!-- Состояние загрузки -->
     <div v-if="isLoading" class="status loading">
       <span class="loader"></span> Loading data...
     </div>
     
-    <!-- Состояние ошибки -->
-    <div v-else-if="error" class="status error">
-      <div class="error-message">{{ error }}</div>
-      <button @click="retry" class="retry-button">Retry</button>
-    </div>
-    
-    <!-- Успешная загрузка -->
-    <template v-else>
+    <ClientOnly>
       <BitcoinChart 
-        :labels="labels"
-        :prices="prices"
-        :isLoading="isLoading"
+        :labels="chartLabels"
+        :prices="chartPrices"
       />
-      <div v-if="!prices.length" class="status no-data">
-        No price data available for selected period
-      </div>
-    </template>
+      <template #fallback>
+        <div class="chart-placeholder">
+          Loading chart...
+        </div>
+      </template>
+    </ClientOnly>
   </div>
 </template>
 
 <script setup lang="ts">
-const labels = ref<string[]>([])
-const prices = ref<number[]>([])
-const isLoading = ref(false)
-const error = ref<string | null>(null)
-const config = useRuntimeConfig()
+const chartLabels = ref<string[]>([]);
+const chartPrices = ref<number[]>([]);
+const isLoading = ref(false);
+const showTestDataWarning = ref(false);
+
+// Загрузка структуры тестовых данных с сервера
+const { data: serverTestData } = await useFetch('/api/test-data');
+
+// Подготовка тестовых данных
+const testData = computed(() => {
+  if (!serverTestData.value?.data) {
+    return {
+      labels: ['1 day ago', '2 days ago', '3 days ago'],
+      prices: [42000, 43000, 44000]
+    };
+  }
+  
+  return {
+    labels: serverTestData.value.data.map(item => item.label),
+    prices: serverTestData.value.data.map(item => item.price)
+  };
+});
+
+const testDataPreview = computed(() => {
+  return testData.value.prices.slice(0, 3).map((price, index) => ({
+    label: `${index + 1} day`,
+    value: price
+  }));
+});
 
 const fetchData = async (params: {
   period: string
@@ -44,60 +73,58 @@ const fetchData = async (params: {
   endDate: string
 }) => {
   try {
-    isLoading.value = true
-    error.value = null
-    labels.value = []
-    prices.value = []
+    isLoading.value = true;
+    showTestDataWarning.value = false;
     
-    // Проверка API ключа перед запросом
-    if (!config.coingeckoApiKey) {
-      throw new Error('API key is missing. Please configure CoinGecko API key in server settings.')
-    }
-
-    const { data, error: fetchError } = await $fetch('/api/prices', {
+    const { data } = await $fetch('/api/prices', {
       params,
       retry: 2,
       timeout: 10000
-    }).catch(e => {
-      throw new Error(e.message || 'Failed to fetch data from server')
-    })
-
-    labels.value = data?.labels || []
-    prices.value = data?.prices || []
+    });
     
-    if (!prices.value.length) {
-      throw new Error('No price data received from server')
+    if (data?.prices?.length) {
+      // Реальные данные из БД
+      chartLabels.value = data.labels;
+      chartPrices.value = data.prices;
+    } else {
+      // Тестовые данные
+      showTestDataWarning.value = true;
+      chartLabels.value = testData.value.labels;
+      chartPrices.value = testData.value.prices;
     }
+
+    console.log('Chart data after fetch:', {
+      labels: chartLabels.value,
+      prices: chartPrices.value
+    });
+
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Unknown error occurred'
-    console.error('Fetch error:', err)
-    
-    // Показываем тестовые данные при ошибке
-    if (error.value.includes('API key')) {
-      labels.value = [
-        new Date(Date.now() - 86400000).toLocaleDateString(),
-        new Date(Date.now() - 172800000).toLocaleDateString(),
-        new Date(Date.now() - 259200000).toLocaleDateString()
-      ]
-      prices.value = [42000, 43000, 44000]
-      error.value += ' (showing test data)'
-    }
+    console.error('API request failed:', err);
+    // Fallback на тестовые данные
+    showTestDataWarning.value = true;
+    chartLabels.value = testData.value.labels;
+    chartPrices.value = testData.value.prices;
   } finally {
-    isLoading.value = false
+    isLoading.value = false;
   }
-}
+};
 
-const retry = () => {
-  fetchData({ period: 'day', startDate: '', endDate: '' })
-}
+// Первая загрузка
+onMounted(async () => {
+  // Сразу показываем тестовые данные, затем пробуем загрузить реальные
+  // chartLabels.value = testData.value.labels;
+  // chartPrices.value = testData.value.prices;
+  // showTestDataWarning.value = true;
+  console.log('Initial chart data:', {
+    labels: chartLabels.value,
+    prices: chartPrices.value
+  });
 
-onMounted(() => {
-  fetchData({ period: 'day', startDate: '', endDate: '' })
-})
+  await fetchData({ period: 'day', startDate: '', endDate: '' });
+});
 </script>
 
 <style scoped>
-/* Стили остаются без изменений из предыдущего примера */
 .bitcoin-tracker {
   max-width: 800px;
   margin: 0 auto;
@@ -107,6 +134,40 @@ onMounted(() => {
 h1 {
   text-align: center;
   margin-bottom: 20px;
+}
+
+.test-data-warning {
+  background-color: #fff3cd;
+  border-left: 4px solid #ffc107;
+  padding: 12px;
+  margin-bottom: 20px;
+  display: flex;
+  gap: 10px;
+  border-radius: 4px;
+}
+
+.warning-icon {
+  font-size: 24px;
+  color: #ffc107;
+}
+
+.warning-content {
+  flex: 1;
+}
+
+.test-values {
+  display: flex;
+  gap: 15px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.test-values span {
+  background: #f8f9fa;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.9em;
 }
 
 .status {
@@ -123,32 +184,6 @@ h1 {
   gap: 10px;
 }
 
-.error {
-  color: #d32f2f;
-}
-
-.no-data {
-  color: #666;
-}
-
-.error-message {
-  margin-bottom: 10px;
-  white-space: pre-line;
-}
-
-.retry-button {
-  padding: 5px 15px;
-  background-color: #f5f5f5;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.retry-button:hover {
-  background-color: #e0e0e0;
-}
-
 .loader {
   display: inline-block;
   width: 16px;
@@ -157,6 +192,16 @@ h1 {
   border-top: 2px solid #3498db;
   border-radius: 50%;
   animation: spin 1s linear infinite;
+}
+
+.chart-placeholder {
+  height: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f5f5;
+  border-radius: 8px;
+  margin-top: 20px;
 }
 
 @keyframes spin {
