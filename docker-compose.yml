@@ -1,28 +1,40 @@
 version: '3.8'
+
 services:
   app:
     build: .
-    ports:
-      - '3000:3000'
+    command: npm run dev
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
     environment:
       DB_HOST: db
-      DB_USER: user
-      DB_PASSWORD: user
-      DB_NAME: bitcoin
+      DB_PORT: 5432
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY}
+    volumes:
+      - .:/app
+      - /app/node_modules
+    working_dir: /app
 
   db:
     image: postgres:13
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: user
-      POSTGRES_DB: bitcoin
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql # Монтируем скрипт
-    ports:
-      - '5432:5432' # Порт для подключения к базе данных
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:
